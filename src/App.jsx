@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import './App.css';
 import Cumpleanos from './components/Cumpleanos';
 import Auth from './components/Auth';
@@ -9,11 +9,13 @@ import OperadorPanel from './components/OperadorPanel';
 import AccesoAdmin, { PERSONAL_INICIAL } from './components/AccesoAdmin';
 import ModalPagoQr from './components/ModalPagoQr';
 import ClienteCuenta from './components/ClienteCuenta';
+import { supabase } from './lib/supabaseClient';
 
 const STORAGE_KEY_PERSONAL = 'xtremefun_personal_v1';
 const STORAGE_KEY_VENTAS = 'xtremefun_ventas_qr_v1';
 const STORAGE_KEY_CLIENTE_SESION = 'xtremefun_cliente_sesion_v1';
 const STORAGE_KEY_SESIONES_OPERADOR = 'xtremefun_operador_sesiones_v1';
+const ESTADO_NUBE_ID = 'megacenter_principal';
 
 function App() {
   const [vistaActual, setVistaActual] = useState('home');
@@ -51,7 +53,93 @@ function App() {
     }
   });
 
+  const [sesionesActivas, setSesionesActivas] = useState(() => {
+    try {
+      const guardado = localStorage.getItem(STORAGE_KEY_SESIONES_OPERADOR);
+      return guardado ? JSON.parse(guardado) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [empleadoAutenticado, setEmpleadoAutenticado] = useState(null);
+  const [nubeLista, setNubeLista] = useState(!supabase);
+
+  const guardarEnNube = useCallback(async (nuevoPersonal, nuevasVentas, nuevasSesiones) => {
+    if (!supabase) return;
+    try {
+      await supabase
+        .from('xtremefun_estado')
+        .upsert({
+          id: ESTADO_NUBE_ID,
+          personal: nuevoPersonal,
+          ventas: nuevasVentas,
+          sesiones_operador: nuevasSesiones,
+          actualizado_en: new Date().toISOString(),
+        });
+    } catch {
+      // Evitar interrumpir la UI si falla la red temporalmente
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) {
+      setNubeLista(true);
+      return;
+    }
+
+    let cancelado = false;
+
+    const cargarDesdeNube = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('xtremefun_estado')
+          .select('personal, ventas, sesiones_operador')
+          .eq('id', ESTADO_NUBE_ID)
+          .single();
+
+        if (cancelado) return;
+
+        if (!error && data) {
+          if (Array.isArray(data.personal) && data.personal.length > 0) {
+            setPersonal(data.personal);
+            localStorage.setItem(STORAGE_KEY_PERSONAL, JSON.stringify(data.personal));
+          } else {
+            await guardarEnNube(
+              PERSONAL_INICIAL,
+              Array.isArray(data.ventas) ? data.ventas : [],
+              Array.isArray(data.sesiones_operador) ? data.sesiones_operador : []
+            );
+          }
+
+          if (Array.isArray(data.ventas)) {
+            setVentasValidadas(data.ventas);
+            localStorage.setItem(STORAGE_KEY_VENTAS, JSON.stringify(data.ventas));
+          }
+
+          if (Array.isArray(data.sesiones_operador)) {
+            setSesionesActivas(data.sesiones_operador);
+            localStorage.setItem(
+              STORAGE_KEY_SESIONES_OPERADOR,
+              JSON.stringify(data.sesiones_operador)
+            );
+          }
+        }
+      } catch {
+        // Si no hay conexión, continúa con los datos locales
+      } finally {
+        if (!cancelado) {
+          setNubeLista(true);
+        }
+      }
+    };
+
+    cargarDesdeNube();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [guardarEnNube]);
 
   useEffect(() => {
     try {
@@ -59,7 +147,10 @@ function App() {
     } catch {
       // Ignorar errores de almacenamiento
     }
-  }, [personal]);
+    if (nubeLista) {
+      guardarEnNube(personal, ventasValidadas, sesionesActivas);
+    }
+  }, [personal, ventasValidadas, sesionesActivas, nubeLista, guardarEnNube]);
 
   useEffect(() => {
     try {
@@ -68,6 +159,14 @@ function App() {
       // Ignorar errores de almacenamiento
     }
   }, [ventasValidadas]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_SESIONES_OPERADOR, JSON.stringify(sesionesActivas));
+    } catch {
+      // Ignorar errores de almacenamiento
+    }
+  }, [sesionesActivas]);
 
   useEffect(() => {
     try {
@@ -285,14 +384,6 @@ function App() {
     navegarA('home');
   };
 
-  let sesionesActivasActuales = [];
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_SESIONES_OPERADOR);
-    sesionesActivasActuales = raw ? JSON.parse(raw) : [];
-  } catch {
-    sesionesActivasActuales = [];
-  }
-
   return (
     <div className="app-container">
       <header className="header">
@@ -462,7 +553,7 @@ function App() {
             onAgregarMenor={handleAgregarMenor}
             onEliminarMenor={handleEliminarMenor}
             ventasValidadas={ventasValidadas}
-            sesionesActivas={sesionesActivasActuales}
+            sesionesActivas={sesionesActivas}
             onConsumirComida={handleConsumirComida}
             volverAlInicio={() => navegarA('home')}
           />
@@ -482,7 +573,7 @@ function App() {
             onAgregarMenor={handleAgregarMenor}
             onEliminarMenor={handleEliminarMenor}
             ventasValidadas={ventasValidadas}
-            sesionesActivas={sesionesActivasActuales}
+            sesionesActivas={sesionesActivas}
             onConsumirComida={handleConsumirComida}
             volverAlInicio={() => navegarA('home')}
           />
@@ -511,6 +602,8 @@ function App() {
               volverAlInicio={handleCerrarSesionAdmin}
               ventasValidadas={ventasValidadas}
               onConsumirPaseAtraccion={handleConsumirPaseAtraccion}
+              sesionesActivas={sesionesActivas}
+              onActualizarSesiones={setSesionesActivas}
             />
           ) : (
             <AdminPanel

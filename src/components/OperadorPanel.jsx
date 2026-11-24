@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import './AdminPanel.css';
 
 const ATRACCIONES_DISPONIBLES = [
@@ -142,10 +142,12 @@ const OperadorPanel = ({
   volverAlInicio,
   ventasValidadas = [],
   onConsumirPaseAtraccion,
+  sesionesActivas: sesionesActivasProp,
+  onActualizarSesiones: onActualizarSesionesProp,
 }) => {
   const [atraccionActiva, setAtraccionActiva] = useState(ATRACCIONES_DISPONIBLES[0].id);
 
-  const [sesionesActivas, setSesionesActivas] = useState(() => {
+  const [sesionesLocales, setSesionesLocales] = useState(() => {
     try {
       const guardado = localStorage.getItem(STORAGE_KEY_SESIONES_ATRACCION);
       if (guardado) return JSON.parse(guardado);
@@ -177,6 +179,26 @@ const OperadorPanel = ({
     ];
   });
 
+  const controladoPorPadre =
+    Array.isArray(sesionesActivasProp) && typeof onActualizarSesionesProp === 'function';
+
+  const sesionesActivas = controladoPorPadre ? sesionesActivasProp : sesionesLocales;
+
+  const actualizarSesiones = useCallback(
+    (actualizador) => {
+      if (controladoPorPadre) {
+        onActualizarSesionesProp((prev) =>
+          typeof actualizador === 'function' ? actualizador(prev || []) : actualizador
+        );
+      } else {
+        setSesionesLocales((prev) =>
+          typeof actualizador === 'function' ? actualizador(prev || []) : actualizador
+        );
+      }
+    },
+    [controladoPorPadre, onActualizarSesionesProp]
+  );
+
   const [ahora, setAhora] = useState(Date.now());
   const [mensajeError, setMensajeError] = useState('');
 
@@ -203,12 +225,13 @@ const OperadorPanel = ({
   }, []);
 
   useEffect(() => {
+    if (controladoPorPadre) return;
     try {
-      localStorage.setItem(STORAGE_KEY_SESIONES_ATRACCION, JSON.stringify(sesionesActivas));
+      localStorage.setItem(STORAGE_KEY_SESIONES_ATRACCION, JSON.stringify(sesionesLocales));
     } catch {
       // Ignorar errores de almacenamiento
     }
-  }, [sesionesActivas]);
+  }, [controladoPorPadre, sesionesLocales]);
 
   const detenerCamara = () => {
     if (streamRef.current) {
@@ -374,7 +397,7 @@ const OperadorPanel = ({
       expiraEn: Date.now() + minutosAsignados * 60 * 1000,
     };
 
-    setSesionesActivas((prev) => [nuevaSesion, ...prev]);
+    actualizarSesiones((prev) => [nuevaSesion, ...prev]);
 
     const restantesDespuesDeUso = paseAtraccion.restantes - 1;
     if (restantesDespuesDeUso > 0) {
@@ -408,7 +431,7 @@ const OperadorPanel = ({
   };
 
   const finalizarSalidaCliente = (idSesion) => {
-    setSesionesActivas((prev) => prev.filter((s) => s.id !== idSesion));
+    actualizarSesiones((prev) => prev.filter((s) => s.id !== idSesion));
   };
 
   const clientesEnAtraccion = sesionesActivas
@@ -848,7 +871,7 @@ const OperadorPanel = ({
                         <span className="badge-alerta">🔴 Tiempo concluido</span>
                       )}
                       {cliente.porConcluir && (
-                        <span className="badge-alerta">⚠️ Por concluir (&lt; 2 min)</span>
+                        <span className="badge-alerta">⚠️ Por concluir (menos de 2 min)</span>
                       )}
                       {!cliente.porConcluir && !cliente.concluido && (
                         <span className="badge-ok">✅ En juego</span>
@@ -919,7 +942,7 @@ const OperadorPanel = ({
                   playsInline
                   style={{
                     width: '100%',
-                    maxHeight: '210px',
+                    maxHeight: '220px',
                     borderRadius: '12px',
                     background: '#000',
                   }}
@@ -928,39 +951,35 @@ const OperadorPanel = ({
             )}
 
             <div className="input-group" style={{ marginBottom: '0.75rem' }}>
-              <label>Código QR de Ingreso / Código de Venta</label>
+              <label>Código QR o Código de Venta</label>
               <input
                 type="text"
-                placeholder="Ej: ING-VTA-123456"
+                placeholder="Ej: ING-VTA-123456 o VTA-123456"
                 value={codigoEscaneoInput}
                 onChange={(e) => setCodigoEscaneoInput(e.target.value)}
               />
             </div>
 
             {ventasConPasesParaAtraccion.length > 0 && (
-              <div style={{ marginBottom: '0.85rem' }}>
-                <span style={{ fontSize: '0.78rem', color: 'var(--text-light)', display: 'block', marginBottom: '0.35rem' }}>
-                  Tickets QR validados disponibles en {infoAtraccion?.nombre}:
-                </span>
+              <div style={{ marginBottom: '0.9rem' }}>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, display: 'block', marginBottom: '0.35rem' }}>
+                  Tickets validados con pases disponibles ({infoAtraccion?.nombre}):
+                </label>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
                   {ventasConPasesParaAtraccion.map((v) => {
-                    const pase = v.pasesPorAtraccion.find((p) => p.atraccionId === atraccionActiva);
+                    const pase = (v.pasesPorAtraccion || []).find(
+                      (p) => p.atraccionId === atraccionActiva
+                    );
+                    const codigo = v.codigoIngresoQr || v.codigoVenta;
                     return (
                       <button
                         key={v.codigoVenta}
                         type="button"
-                        onClick={() => procesarCodigoQrEscaneado(v.codigoIngresoQr)}
-                        style={{
-                          background: 'var(--bg-color)',
-                          border: '1px solid #cbd5e1',
-                          borderRadius: '50px',
-                          padding: '0.28rem 0.7rem',
-                          fontSize: '0.76rem',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                        }}
+                        className="btn-secondary"
+                        style={{ padding: '0.3rem 0.6rem', fontSize: '0.76rem' }}
+                        onClick={() => procesarCodigoQrEscaneado(codigo)}
                       >
-                        {v.codigoIngresoQr} ({pase.restantes} pase(s))
+                        {codigo} ({pase?.restantes} pase/s)
                       </button>
                     );
                   })}
@@ -969,29 +988,29 @@ const OperadorPanel = ({
             )}
 
             {errorEscaneo && (
-              <div
-                style={{
-                  backgroundColor: '#fff5f5',
-                  border: '1px solid #feb2b2',
-                  color: '#c53030',
-                  padding: '0.65rem 0.85rem',
-                  borderRadius: '10px',
-                  fontSize: '0.82rem',
-                  marginBottom: '0.85rem',
-                }}
-              >
+              <p style={{ color: '#c53030', fontSize: '0.82rem', marginBottom: '0.75rem' }}>
                 {errorEscaneo}
-              </div>
+              </p>
             )}
 
-            <button
-              type="button"
-              className="btn-primary btn-full"
-              style={{ marginTop: 0 }}
-              onClick={() => procesarCodigoQrEscaneado()}
-            >
-              Validar QR y Elegir Quién Ingresa
-            </button>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                style={{ padding: '0.45rem 0.9rem', fontSize: '0.84rem' }}
+                onClick={cerrarEscanerQr}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ marginTop: 0, padding: '0.45rem 1rem', fontSize: '0.84rem' }}
+                onClick={() => procesarCodigoQrEscaneado()}
+              >
+                Buscar Ticket
+              </button>
+            </div>
           </div>
         </div>
       )}

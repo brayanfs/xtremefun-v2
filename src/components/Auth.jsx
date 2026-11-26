@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import './Auth.css';
 
 const STORAGE_KEY_CLIENTES = 'xtremefun_clientes_registrados_v1';
@@ -20,11 +20,39 @@ const guardarClientesEnStorage = (clientes) => {
   }
 };
 
-const Auth = ({ abrirModalGlobal, onClienteAutenticado }) => {
+const Auth = ({
+  abrirModalGlobal,
+  onClienteAutenticado,
+  clientesRegistrados: clientesRegistradosProp,
+  onActualizarClientes: onActualizarClientesProp,
+}) => {
   const [esLogin, setEsLogin] = useState(true);
   const [loginInput, setLoginInput] = useState('');
+  const [passwordLogin, setPasswordLogin] = useState('');
   const [errorLogin, setErrorLogin] = useState('');
-  const [clientesRegistrados, setClientesRegistrados] = useState(cargarClientesGuardados);
+  const [clientesLocales, setClientesLocales] = useState(cargarClientesGuardados);
+
+  const controladoPorPadre =
+    Array.isArray(clientesRegistradosProp) && typeof onActualizarClientesProp === 'function';
+
+  const clientesRegistrados = controladoPorPadre
+    ? clientesRegistradosProp
+    : clientesLocales;
+
+  const actualizarClientes = useCallback(
+    (actualizador) => {
+      if (controladoPorPadre) {
+        onActualizarClientesProp((prev) =>
+          typeof actualizador === 'function' ? actualizador(prev || []) : actualizador
+        );
+      } else {
+        setClientesLocales((prev) =>
+          typeof actualizador === 'function' ? actualizador(prev || []) : actualizador
+        );
+      }
+    },
+    [controladoPorPadre, onActualizarClientesProp]
+  );
 
   const [formData, setFormData] = useState({
     ci: '',
@@ -47,8 +75,9 @@ const Auth = ({ abrirModalGlobal, onClienteAutenticado }) => {
   const [isDrawing, setIsDrawing] = useState(false);
 
   useEffect(() => {
-    guardarClientesEnStorage(clientesRegistrados);
-  }, [clientesRegistrados]);
+    if (controladoPorPadre) return;
+    guardarClientesEnStorage(clientesLocales);
+  }, [controladoPorPadre, clientesLocales]);
 
   useEffect(() => {
     if (mostrarFirma && canvasRef.current) {
@@ -113,37 +142,38 @@ const Auth = ({ abrirModalGlobal, onClienteAutenticado }) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  // Iniciar sesión: NO pide firma de responsabilidades
+  // Iniciar sesión: valida contra clientes registrados y su contraseña
   const handleLogin = (e) => {
     e.preventDefault();
     setErrorLogin('');
 
     const limpio = loginInput.trim();
+    const clave = passwordLogin;
     const esCorreo = limpio.includes('@');
 
-    const encontrado = clientesRegistrados.find((cli) => {
-      if (esCorreo) {
-        return String(cli.email || '').toLowerCase() === limpio.toLowerCase();
-      }
-      return String(cli.ci || '').trim() === limpio;
-    });
-
-    if (encontrado) {
-      if (onClienteAutenticado) {
-        onClienteAutenticado(encontrado);
-      }
+    if (!limpio || !clave) {
+      setErrorLogin('Ingresa tu CI o correo electrónico y tu contraseña.');
       return;
     }
 
-    const clienteRapido = {
-      nombre: esCorreo ? limpio.split('@')[0] : `Cliente ${limpio}`,
-      ci: esCorreo ? 'No especificado' : limpio,
-      email: esCorreo ? limpio : `cliente.${limpio}@xtremefun.bo`,
-      exencionFirmada: false,
-    };
+    const encontrado = clientesRegistrados.find((cli) => {
+      const coincideUsuario = esCorreo
+        ? String(cli.email || '').trim().toLowerCase() === limpio.toLowerCase()
+        : String(cli.ci || '').trim() === limpio;
+      const coincidePassword = String(cli.password || '') === clave;
+      return coincideUsuario && coincidePassword;
+    });
 
+    if (!encontrado) {
+      setErrorLogin(
+        'CI, correo o contraseña incorrectos. Si aún no tienes cuenta, regístrate primero.'
+      );
+      return;
+    }
+
+    setPasswordLogin('');
     if (onClienteAutenticado) {
-      onClienteAutenticado(clienteRapido);
+      onClienteAutenticado(encontrado);
     }
   };
 
@@ -167,6 +197,8 @@ const Auth = ({ abrirModalGlobal, onClienteAutenticado }) => {
       telefono: formData.telefono.trim(),
       email: formData.email.trim(),
       fechaNacimiento: formData.fechaNacimiento,
+      password: formData.password,
+      menores: [],
       exencionFirmada: false,
       firmaImagen: '',
       tutorNombre: '',
@@ -203,6 +235,8 @@ const Auth = ({ abrirModalGlobal, onClienteAutenticado }) => {
         nombre: 'Cliente XtremeFun',
         ci: '0000000',
         email: 'cliente@xtremefun.bo',
+        password: '',
+        menores: [],
       }),
       exencionFirmada: true,
       firmaImagen: firmaDataUrl,
@@ -210,8 +244,8 @@ const Auth = ({ abrirModalGlobal, onClienteAutenticado }) => {
       fechaFirma: new Date().toLocaleString('es-BO'),
     };
 
-    setClientesRegistrados((prev) => {
-      const sinDuplicado = prev.filter(
+    actualizarClientes((prev) => {
+      const sinDuplicado = (prev || []).filter(
         (c) =>
           (c.ci && clienteGuardado.ci && c.ci === clienteGuardado.ci) ||
           (c.email &&
@@ -224,6 +258,16 @@ const Auth = ({ abrirModalGlobal, onClienteAutenticado }) => {
     setMostrarFirma(false);
     setFirmaAceptada(false);
     setClientePendienteRegistro(null);
+    setFormData({
+      ci: '',
+      nombre: '',
+      apellido: '',
+      telefono: '',
+      email: '',
+      fechaNacimiento: '',
+      password: '',
+      confirmPassword: '',
+    });
 
     if (onClienteAutenticado) {
       onClienteAutenticado(clienteGuardado);
@@ -280,7 +324,13 @@ const Auth = ({ abrirModalGlobal, onClienteAutenticado }) => {
                 </div>
                 <div className="input-group">
                   <label>Contraseña</label>
-                  <input type="password" placeholder="••••••••" required />
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    value={passwordLogin}
+                    onChange={(e) => setPasswordLogin(e.target.value)}
+                    required
+                  />
                 </div>
                 {errorLogin && (
                   <div
@@ -435,6 +485,7 @@ const Auth = ({ abrirModalGlobal, onClienteAutenticado }) => {
               type="button"
               onClick={() => {
                 setErrorLogin('');
+                setPasswordLogin('');
                 setEsLogin(!esLogin);
               }}
               className="btn-link"

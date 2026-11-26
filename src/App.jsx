@@ -15,6 +15,7 @@ const STORAGE_KEY_PERSONAL = 'xtremefun_personal_v1';
 const STORAGE_KEY_VENTAS = 'xtremefun_ventas_qr_v1';
 const STORAGE_KEY_CLIENTE_SESION = 'xtremefun_cliente_sesion_v1';
 const STORAGE_KEY_SESIONES_OPERADOR = 'xtremefun_operador_sesiones_v1';
+const STORAGE_KEY_CLIENTES = 'xtremefun_clientes_registrados_v1';
 const ESTADO_NUBE_ID = 'megacenter_principal';
 
 function App() {
@@ -62,25 +63,38 @@ function App() {
     }
   });
 
+  const [clientesRegistrados, setClientesRegistrados] = useState(() => {
+    try {
+      const guardado = localStorage.getItem(STORAGE_KEY_CLIENTES);
+      return guardado ? JSON.parse(guardado) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [empleadoAutenticado, setEmpleadoAutenticado] = useState(null);
   const [nubeLista, setNubeLista] = useState(!supabase);
 
-  const guardarEnNube = useCallback(async (nuevoPersonal, nuevasVentas, nuevasSesiones) => {
-    if (!supabase) return;
-    try {
-      await supabase
-        .from('xtremefun_estado')
-        .upsert({
-          id: ESTADO_NUBE_ID,
-          personal: nuevoPersonal,
-          ventas: nuevasVentas,
-          sesiones_operador: nuevasSesiones,
-          actualizado_en: new Date().toISOString(),
-        });
-    } catch {
-      // Evitar interrumpir la UI si falla la red temporalmente
-    }
-  }, []);
+  const guardarEnNube = useCallback(
+    async (nuevoPersonal, nuevasVentas, nuevasSesiones, nuevosClientes) => {
+      if (!supabase) return;
+      try {
+        await supabase
+          .from('xtremefun_estado')
+          .upsert({
+            id: ESTADO_NUBE_ID,
+            personal: nuevoPersonal,
+            ventas: nuevasVentas,
+            sesiones_operador: nuevasSesiones,
+            clientes: nuevosClientes,
+            actualizado_en: new Date().toISOString(),
+          });
+      } catch {
+        // Evitar interrumpir la UI si falla la red temporalmente
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (!supabase) {
@@ -94,22 +108,24 @@ function App() {
       try {
         const { data, error } = await supabase
           .from('xtremefun_estado')
-          .select('personal, ventas, sesiones_operador')
+          .select('personal, ventas, sesiones_operador, clientes')
           .eq('id', ESTADO_NUBE_ID)
           .single();
 
         if (cancelado) return;
 
         if (!error && data) {
+          const ventasNube = Array.isArray(data.ventas) ? data.ventas : [];
+          const sesionesNube = Array.isArray(data.sesiones_operador)
+            ? data.sesiones_operador
+            : [];
+          const clientesNube = Array.isArray(data.clientes) ? data.clientes : [];
+
           if (Array.isArray(data.personal) && data.personal.length > 0) {
             setPersonal(data.personal);
             localStorage.setItem(STORAGE_KEY_PERSONAL, JSON.stringify(data.personal));
           } else {
-            await guardarEnNube(
-              PERSONAL_INICIAL,
-              Array.isArray(data.ventas) ? data.ventas : [],
-              Array.isArray(data.sesiones_operador) ? data.sesiones_operador : []
-            );
+            await guardarEnNube(PERSONAL_INICIAL, ventasNube, sesionesNube, clientesNube);
           }
 
           if (Array.isArray(data.ventas)) {
@@ -123,6 +139,11 @@ function App() {
               STORAGE_KEY_SESIONES_OPERADOR,
               JSON.stringify(data.sesiones_operador)
             );
+          }
+
+          if (Array.isArray(data.clientes)) {
+            setClientesRegistrados(data.clientes);
+            localStorage.setItem(STORAGE_KEY_CLIENTES, JSON.stringify(data.clientes));
           }
         }
       } catch {
@@ -148,9 +169,16 @@ function App() {
       // Ignorar errores de almacenamiento
     }
     if (nubeLista) {
-      guardarEnNube(personal, ventasValidadas, sesionesActivas);
+      guardarEnNube(personal, ventasValidadas, sesionesActivas, clientesRegistrados);
     }
-  }, [personal, ventasValidadas, sesionesActivas, nubeLista, guardarEnNube]);
+  }, [
+    personal,
+    ventasValidadas,
+    sesionesActivas,
+    clientesRegistrados,
+    nubeLista,
+    guardarEnNube,
+  ]);
 
   useEffect(() => {
     try {
@@ -167,6 +195,14 @@ function App() {
       // Ignorar errores de almacenamiento
     }
   }, [sesionesActivas]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_CLIENTES, JSON.stringify(clientesRegistrados));
+    } catch {
+      // Ignorar errores de almacenamiento
+    }
+  }, [clientesRegistrados]);
 
   useEffect(() => {
     try {
@@ -542,6 +578,8 @@ function App() {
         <Auth
           abrirModalGlobal={abrirModal}
           onClienteAutenticado={handleClienteAutenticado}
+          clientesRegistrados={clientesRegistrados}
+          onActualizarClientes={setClientesRegistrados}
         />
       )}
 
@@ -550,6 +588,7 @@ function App() {
           <ClienteCuenta
             seccionInicial="perfil"
             clienteActual={clienteActual}
+            clientesRegistrados={clientesRegistrados}
             onAgregarMenor={handleAgregarMenor}
             onEliminarMenor={handleEliminarMenor}
             ventasValidadas={ventasValidadas}
@@ -561,6 +600,8 @@ function App() {
           <Auth
             abrirModalGlobal={abrirModal}
             onClienteAutenticado={handleClienteAutenticado}
+            clientesRegistrados={clientesRegistrados}
+            onActualizarClientes={setClientesRegistrados}
           />
         )
       )}
@@ -570,6 +611,7 @@ function App() {
           <ClienteCuenta
             seccionInicial="tickets"
             clienteActual={clienteActual}
+            clientesRegistrados={clientesRegistrados}
             onAgregarMenor={handleAgregarMenor}
             onEliminarMenor={handleEliminarMenor}
             ventasValidadas={ventasValidadas}
@@ -581,6 +623,8 @@ function App() {
           <Auth
             abrirModalGlobal={abrirModal}
             onClienteAutenticado={handleClienteAutenticado}
+            clientesRegistrados={clientesRegistrados}
+            onActualizarClientes={setClientesRegistrados}
           />
         )
       )}
